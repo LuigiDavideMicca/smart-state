@@ -7,11 +7,31 @@ export interface Serializer<T> {
   write: (value: T) => string
 }
 
-export interface SmartStateOptions<T> {
-  /** Persist the value to web storage (requires `storageKey`). */
-  persist?: boolean
-  /** Storage key. Also shares the state between every component using it. */
-  storageKey?: string
+/**
+ * Augment this interface to get fully typed keys in `getSmartState`,
+ * `setSmartState`, `subscribeSmartState` and `useSmartSelector`:
+ *
+ * ```ts
+ * declare module 'smart-state' {
+ *   interface SmartStateRegistry { theme: 'light' | 'dark' }
+ * }
+ * ```
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface SmartStateRegistry {}
+
+type RegistryKey = keyof SmartStateRegistry & string
+
+interface CommonOptions {
+  /** Called instead of `console.warn` when reading, writing or syncing fails. */
+  onError?: (error: unknown, context: 'read' | 'write' | 'sync') => void
+}
+
+export interface PersistOptions<T> extends CommonOptions {
+  /** Persist the value to web storage. */
+  persist: true
+  /** Storage key — required with `persist`, enforced at the type level. */
+  storageKey: string
   /** `local` (default) or `session`. Cross-tab sync only works with `local`. */
   storageType?: StorageType
   /** Keep the value in sync across browser tabs via the `storage` event. */
@@ -22,9 +42,19 @@ export interface SmartStateOptions<T> {
   writeDebounce?: number
   /** Custom (de)serialization; defaults to JSON. */
   serializer?: Serializer<T>
-  /** Called instead of `console.warn` when reading, writing or syncing fails. */
-  onError?: (error: unknown, context: 'read' | 'write' | 'sync') => void
+  /** Validate untrusted data from storage or other tabs: return the value or throw. */
+  parse?: (value: unknown) => T
+  /** Schema version of the persisted value. Bump it when the shape changes. */
+  version?: number
+  /** Upgrade values persisted with an older version; return undefined to discard them. */
+  migrate?: (value: unknown, fromVersion: number) => T | undefined
 }
+
+export interface EphemeralOptions extends CommonOptions {
+  persist?: false
+}
+
+export type SmartStateOptions<T> = PersistOptions<T> | EphemeralOptions
 
 export type SetSmartState<T> = (next: T | ((current: T) => T)) => void
 
@@ -42,17 +72,22 @@ interface Envelope {
   __vss: 1
   value: string
   expires?: number
+  v?: number
 }
+
+const isEnvelope = (parsed: unknown): parsed is Envelope =>
+  typeof parsed === 'object' &&
+  parsed !== null &&
+  (parsed as { __vss?: unknown }).__vss === 1 &&
+  typeof (parsed as { value?: unknown }).value === 'string'
 
 interface Store<T> {
   value: T
-  initial: T
-  listeners: Set<() => void>
-  set: SetSmartState<T>
-  reset: () => void
-  clear: () => void
-  hydrated: boolean
-  hydrate: () => void
+  readonly initial: T
+  readonly listeners: Set<() => void>
+  readonly set: SetSmartState<T>
+  readonly controls: SmartStateControls
+  readonly hydrate: () => void
 }
 
 const isClient = typeof window !== 'undefined'
@@ -63,53 +98,67 @@ const defaultSerializer = <T>(): Serializer<T> => ({
   write: (value) => JSON.stringify(value)
 })
 
-const resolve = <T>(next: T | ((current: T) => T), current: T): T =>
+const resolveNext = <T>(next: T | ((current: T) => T), current: T): T =>
   typeof next === 'function' ? (next as (current: T) => T)(current) : next
 
-function createStore<T>(initial: T, key: string | undefined, options: SmartStateOptions<T>): Store<T> {
+const resolveInitial = <T>(initial: T | (() => T)): T =>
+  typeof initial === 'function' ? (initial as () => T)() : initial
+
+function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
+  const persisted = options.persist === true ? options : undefined
+  const key = persisted?.storageKey
   const {
-    persist = false,
-    storageType = 'local',
-    syncTabs = false,
-    ttl,
-    writeDebounce,
-    serializer = defaultSerializer<T>(),
-    onError = (error, context) =>
-      console.warn(`[smart-state] ${context} failed for key "${key}"`, error)
+    onError = (error: unknown, context: string) =>
+      console.warn(`[smart-state] ${context} failed${key ? ` for key "${key}"` : ''}`, error)
   } = options
+  const serializer = persisted?.serializer ?? defaultSerializer<T>()
+  const ttl = persisted?.ttl
+  const version = persisted?.version
+  const writeDebounce = persisted?.writeDebounce
 
   const storage =
-    persist && key && isClient
-      ? storageType === 'local'
-        ? window.localStorage
-        : window.sessionStorage
+    persisted && key !== undefined && isClient
+      ? persisted.storageType === 'session'
+        ? window.sessionStorage
+        : window.localStorage
       : undefined
 
   const decode = (raw: string): T | undefined => {
+    let payload = raw
+    let fromVersion = 0
     try {
       const parsed: unknown = JSON.parse(raw)
-      if (parsed !== null && typeof parsed === 'object' && (parsed as Envelope).__vss === 1) {
-        const envelope = parsed as Envelope
-        if (envelope.expires !== undefined && Date.now() > envelope.expires) return undefined
-        return serializer.read(envelope.value)
+      if (isEnvelope(parsed)) {
+        if (parsed.expires !== undefined && Date.now() > parsed.expires) return undefined
+        payload = parsed.value
+        fromVersion = parsed.v ?? 0
       }
     } catch {
-      // plain legacy value: fall through
+      // plain legacy value: fall through with version 0
     }
-    return serializer.read(raw)
+    let value: unknown = serializer.read(payload)
+    if (version !== undefined && fromVersion !== version) {
+      if (!persisted?.migrate) return undefined
+      value = persisted.migrate(value, fromVersion)
+      if (value === undefined) return undefined
+    }
+    return persisted?.parse ? persisted.parse(value) : (value as T)
   }
 
   const encode = (value: T): string => {
     const written = serializer.write(value)
-    if (ttl === undefined) return written
-    return JSON.stringify({ __vss: 1, value: written, expires: Date.now() + ttl } satisfies Envelope)
+    if (ttl === undefined && version === undefined) return written
+    const envelope: Envelope = { __vss: 1, value: written }
+    if (ttl !== undefined) envelope.expires = Date.now() + ttl
+    if (version !== undefined) envelope.v = version
+    return JSON.stringify(envelope)
   }
 
   let lastWritten: string | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
 
-  const writeNow = (value: T) => {
-    if (!storage || !key) return
+  const writeNow = (value: T): void => {
+    if (!storage || key === undefined) return
     try {
       const raw = encode(value)
       if (raw === lastWritten) return
@@ -120,8 +169,11 @@ function createStore<T>(initial: T, key: string | undefined, options: SmartState
     }
   }
 
-  const write = (value: T) => {
-    if (writeDebounce === undefined) return writeNow(value)
+  const write = (value: T): void => {
+    if (writeDebounce === undefined) {
+      writeNow(value)
+      return
+    }
     if (timer !== undefined) clearTimeout(timer)
     timer = setTimeout(() => {
       timer = undefined
@@ -129,21 +181,22 @@ function createStore<T>(initial: T, key: string | undefined, options: SmartState
     }, writeDebounce)
   }
 
-  const notify = () => store.listeners.forEach((listener) => listener())
+  const notify = (): void => store.listeners.forEach((listener) => listener())
+
+  let hydrated = !storage
 
   const store: Store<T> = {
     value: initial,
     initial,
     listeners: new Set(),
-    hydrated: !storage,
     hydrate: () => {
-      if (store.hydrated || !storage || !key) return
-      store.hydrated = true
+      if (hydrated || !storage || key === undefined) return
+      hydrated = true
       try {
         const raw = storage.getItem(key)
         if (raw !== null) {
           const decoded = decode(raw)
-          if (decoded !== undefined && decoded !== store.value) {
+          if (decoded !== undefined && !Object.is(decoded, store.value)) {
             store.value = decoded
             notify()
           }
@@ -153,32 +206,34 @@ function createStore<T>(initial: T, key: string | undefined, options: SmartState
       }
     },
     set: (next) => {
-      const resolved = resolve(next, store.value)
+      const resolved = resolveNext(next, store.value)
       if (Object.is(resolved, store.value)) return
       store.value = resolved
       write(resolved)
       notify()
     },
-    reset: () => {
-      if (timer !== undefined) clearTimeout(timer)
-      store.value = store.initial
-      writeNow(store.initial)
-      notify()
-    },
-    clear: () => {
-      if (timer !== undefined) clearTimeout(timer)
-      try {
-        storage?.removeItem(key!)
-      } catch (error) {
-        onError(error, 'write')
+    controls: {
+      reset: () => {
+        if (timer !== undefined) clearTimeout(timer)
+        store.value = store.initial
+        writeNow(store.initial)
+        notify()
+      },
+      clear: () => {
+        if (timer !== undefined) clearTimeout(timer)
+        try {
+          if (key !== undefined) storage?.removeItem(key)
+        } catch (error) {
+          onError(error, 'write')
+        }
+        lastWritten = undefined
+        store.value = store.initial
+        notify()
       }
-      lastWritten = undefined
-      store.value = store.initial
-      notify()
     }
   }
 
-  if (storage && key && syncTabs) {
+  if (storage && key !== undefined && persisted?.syncTabs) {
     window.addEventListener('storage', (event) => {
       if (event.key !== key || event.storageArea !== storage) return
       if (event.newValue === null) {
@@ -211,44 +266,41 @@ function createStore<T>(initial: T, key: string | undefined, options: SmartState
   return store
 }
 
-function getStore<T>(
-  initial: T | (() => T),
-  options: SmartStateOptions<T>,
-  anonymous: { current?: Store<T> }
-): Store<T> {
-  const key = options.persist && options.storageKey ? options.storageKey : undefined
-  if (key) {
-    let store = stores.get(key) as Store<T> | undefined
-    if (!store) {
-      store = createStore(resolve(initial as T | ((c: T) => T), undefined as T), key, options)
-      stores.set(key, store as Store<unknown>)
-    }
-    return store
-  }
-  if (!anonymous.current) {
-    anonymous.current = createStore(resolve(initial as T | ((c: T) => T), undefined as T), undefined, options)
-  }
-  return anonymous.current
+function getKeyedStore<T>(key: string): Store<T> | undefined {
+  return stores.get(key) as Store<T> | undefined
 }
 
 /**
  * React's useState, grown up: persistent, shared across components and tabs,
- * with TTL, debounced writes and custom serializers. SSR-safe (Next.js
- * included): the server renders the initial value, the client hydrates from
- * storage right after mount — no hydration mismatch.
+ * with TTL, versioned migrations, runtime validation, debounced writes and
+ * custom serializers. SSR-safe (Next.js included): the server renders the
+ * initial value, the client hydrates from storage right after mount — no
+ * hydration mismatch.
  */
 export function useSmartState<T>(
   initialValue: T | (() => T),
   options: SmartStateOptions<T> = {}
 ): SmartStateReturn<T> {
   const anonymous = useRef<Store<T>>(undefined)
-  const store = getStore(initialValue, options, anonymous)
+  const key = options.persist === true ? options.storageKey : undefined
+
+  let store: Store<T>
+  if (key !== undefined) {
+    const existing = getKeyedStore<T>(key)
+    store = existing ?? createStore(resolveInitial(initialValue), options)
+    if (!existing) stores.set(key, store as Store<unknown>)
+  } else {
+    anonymous.current ??= createStore(resolveInitial(initialValue), options)
+    store = anonymous.current
+  }
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       store.listeners.add(onStoreChange)
       store.hydrate()
-      return () => store.listeners.delete(onStoreChange)
+      return () => {
+        store.listeners.delete(onStoreChange)
+      }
     },
     [store]
   )
@@ -259,20 +311,88 @@ export function useSmartState<T>(
     () => store.initial
   )
 
-  const controls = useMemo<SmartStateControls>(
-    () => ({ reset: store.reset, clear: store.clear }),
-    [store]
-  )
-
-  return [value, store.set, controls]
+  return [value, store.set, store.controls]
 }
 
-/** Read a keyed smart state outside React (returns undefined if never used). */
+/**
+ * Subscribe to a slice of a keyed smart state: the component re-renders only
+ * when the selected value changes (per `isEqual`, `Object.is` by default).
+ */
+export function useSmartSelector<K extends RegistryKey, S>(
+  storageKey: K,
+  selector: (value: SmartStateRegistry[K] | undefined) => S,
+  isEqual?: (a: S, b: S) => boolean
+): S
+export function useSmartSelector<T, S>(
+  storageKey: string,
+  selector: (value: T | undefined) => S,
+  isEqual?: (a: S, b: S) => boolean
+): S
+export function useSmartSelector<T, S>(
+  storageKey: string,
+  selector: (value: T | undefined) => S,
+  isEqual: (a: S, b: S) => boolean = Object.is
+): S {
+  const cache = useRef<{ has: boolean; value: S }>({ has: false, value: undefined as S })
+
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      const store = getKeyedStore<T>(storageKey)
+      if (!store) return () => {}
+      store.listeners.add(onStoreChange)
+      store.hydrate()
+      return () => {
+        store.listeners.delete(onStoreChange)
+      }
+    },
+    [storageKey]
+  )
+
+  const getSnapshot = useCallback((): S => {
+    const selected = selector(getKeyedStore<T>(storageKey)?.value)
+    if (!cache.current.has || !isEqual(cache.current.value, selected)) {
+      cache.current = { has: true, value: selected }
+    }
+    return cache.current.value
+    // selector/isEqual are expected stable, keyed subscriptions re-create on key change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey])
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
+
+/** Read a keyed smart state outside React (undefined if never used). */
+export function getSmartState<K extends RegistryKey>(storageKey: K): SmartStateRegistry[K] | undefined
+export function getSmartState<T>(storageKey: string): T | undefined
 export function getSmartState<T>(storageKey: string): T | undefined {
-  return (stores.get(storageKey) as Store<T> | undefined)?.value
+  return getKeyedStore<T>(storageKey)?.value
 }
 
 /** Write a keyed smart state outside React (no-op if never used). */
+export function setSmartState<K extends RegistryKey>(
+  storageKey: K,
+  next: SmartStateRegistry[K] | ((current: SmartStateRegistry[K]) => SmartStateRegistry[K])
+): void
+export function setSmartState<T>(storageKey: string, next: T | ((current: T) => T)): void
 export function setSmartState<T>(storageKey: string, next: T | ((current: T) => T)): void {
-  ;(stores.get(storageKey) as Store<T> | undefined)?.set(next)
+  getKeyedStore<T>(storageKey)?.set(next)
+}
+
+/** Listen to a keyed smart state outside React. Returns an unsubscribe function. */
+export function subscribeSmartState<K extends RegistryKey>(
+  storageKey: K,
+  listener: (value: SmartStateRegistry[K]) => void
+): () => void
+export function subscribeSmartState<T>(storageKey: string, listener: (value: T) => void): () => void
+export function subscribeSmartState<T>(
+  storageKey: string,
+  listener: (value: T) => void
+): () => void {
+  const store = getKeyedStore<T>(storageKey)
+  if (!store) return () => {}
+  const wrapped = () => listener(store.value)
+  store.listeners.add(wrapped)
+  return () => {
+    store.listeners.delete(wrapped)
+  }
 }

@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getSmartState, setSmartState, useSmartState } from '../src/index'
+import { getSmartState, setSmartState, subscribeSmartState, useSmartSelector, useSmartState, type SmartStateOptions } from '../src/index'
 
 let seq = 0
 let KEY = ''
@@ -123,5 +123,87 @@ describe('controls and imperative access', () => {
     expect(getSmartState<number>(KEY)).toBe(1)
     act(() => setSmartState<number>(KEY, (v) => v + 9))
     expect(result.current[0]).toBe(10)
+  })
+})
+
+describe('validation and migrations', () => {
+  it('parse() rejects corrupt data and falls back to the initial value', () => {
+    localStorage.setItem(KEY, '"not-a-number"')
+    const onError = vi.fn()
+    const { result } = renderHook(() =>
+      useSmartState(7, {
+        persist: true,
+        storageKey: KEY,
+        onError,
+        parse: (v) => {
+          if (typeof v !== 'number') throw new Error('expected number')
+          return v
+        }
+      })
+    )
+    expect(result.current[0]).toBe(7)
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), 'read')
+  })
+
+  it('migrates older persisted versions', () => {
+    localStorage.setItem(KEY, JSON.stringify({ name: 'anna' })) // v0, legacy shape
+    const { result } = renderHook(() =>
+      useSmartState({ fullName: 'init' }, {
+        persist: true,
+        storageKey: KEY,
+        version: 2,
+        migrate: (old) => ({ fullName: (old as { name: string }).name.toUpperCase() })
+      })
+    )
+    expect(result.current[0]).toEqual({ fullName: 'ANNA' })
+  })
+
+  it('discards persisted values on version mismatch without a migrate fn', () => {
+    localStorage.setItem(KEY, JSON.stringify({ __vss: 1, value: '"old"', v: 1 }))
+    const { result } = renderHook(() =>
+      useSmartState('init', { persist: true, storageKey: KEY, version: 2 })
+    )
+    expect(result.current[0]).toBe('init')
+  })
+})
+
+describe('selector and external subscription', () => {
+  it('useSmartSelector re-renders only when the slice changes', () => {
+    const opts = { persist: true, storageKey: KEY } as const
+    const source = renderHook(() => useSmartState({ a: 1, b: 1 }, opts))
+    let renders = 0
+    const selected = renderHook(() => {
+      renders++
+      return useSmartSelector<{ a: number; b: number }, number>(KEY, (v) => v?.a ?? 0)
+    })
+    expect(selected.result.current).toBe(1)
+    const before = renders
+    act(() => source.result.current[1]((s) => ({ ...s, b: 99 })))
+    expect(selected.result.current).toBe(1)
+    expect(renders).toBe(before)
+    act(() => source.result.current[1]((s) => ({ ...s, a: 2 })))
+    expect(selected.result.current).toBe(2)
+  })
+
+  it('subscribeSmartState notifies outside React', () => {
+    const { result } = renderHook(() => useSmartState(0, { persist: true, storageKey: KEY }))
+    const seen: number[] = []
+    const off = subscribeSmartState<number>(KEY, (v) => seen.push(v))
+    act(() => result.current[1](1))
+    act(() => result.current[1](2))
+    off()
+    act(() => result.current[1](3))
+    expect(seen).toEqual([1, 2])
+  })
+})
+
+describe('type safety', () => {
+  it('rejects persist without storageKey at compile time', () => {
+    // @ts-expect-error — storageKey is mandatory with persist: true
+    const bad: SmartStateOptions<number> = { persist: true }
+    // @ts-expect-error — ttl is a persistence option
+    const alsoBad: SmartStateOptions<number> = { ttl: 1000 }
+    void bad
+    void alsoBad
   })
 })

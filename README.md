@@ -1,6 +1,6 @@
 # smart-state
 
-React's `useState`, grown up: **persistent, shared across components and tabs, TTL expiry, debounced writes, SSR/Next.js-safe** — with no provider, zero dependencies and **~1.1 kB** min+gzip.
+React's `useState`, grown up: **persistent, shared across components and tabs, TTL expiry, versioned migrations, runtime validation, debounced writes, SSR/Next.js-safe** — with no provider, zero dependencies and **~1.4 kB** min+gzip.
 
 [![npm](https://img.shields.io/npm/v/smart-state)](https://www.npmjs.com/package/smart-state)
 [![ci](https://github.com/LuigiDavideMicca/smart-state/actions/workflows/ci.yml/badge.svg)](https://github.com/LuigiDavideMicca/smart-state/actions/workflows/ci.yml)
@@ -63,6 +63,56 @@ useSmartState(new Set<string>(), {
 
 Pending debounced writes are flushed on `pagehide`, so closing the tab never loses the last value.
 
+## Trust nothing from storage: validation and migrations
+
+Storage data is user-editable and survives your releases — treat it as untrusted input:
+
+```tsx
+const [user, setUser] = useSmartState<User>(guest, {
+  persist: true,
+  storageKey: 'user',
+  parse: userSchema.parse, // zod, valibot, or any (value: unknown) => T that throws
+  version: 2,
+  migrate: (old, fromVersion) =>
+    fromVersion === 1 ? upgradeV1(old) : undefined // undefined = discard
+})
+```
+
+`parse` runs on every read and cross-tab message; anything invalid falls back to the initial value (and reaches `onError`). `version`/`migrate` upgrade values persisted by previous releases instead of crashing on old shapes.
+
+## Fine-grained subscriptions
+
+Re-render only on the slice you care about:
+
+```tsx
+const itemCount = useSmartSelector<Cart, number>('cart', (cart) => cart?.items.length ?? 0)
+```
+
+And listen from anywhere, React or not:
+
+```ts
+const unsubscribe = subscribeSmartState<Cart>('cart', (cart) => analytics.track(cart))
+```
+
+## Obsessively typed
+
+- **Impossible states don't compile**: `persist: true` *requires* `storageKey`; `ttl`, `syncTabs`, `serializer`, `version` only exist alongside `persist` — using them without it is a type error, not a runtime surprise.
+- **Typed keys via declaration merging**: augment the registry once and every keyed API becomes fully typed:
+
+```ts
+declare module 'smart-state' {
+  interface SmartStateRegistry {
+    theme: 'light' | 'dark'
+    cart: Cart
+  }
+}
+
+getSmartState('theme') // 'light' | 'dark' | undefined — no generics needed
+setSmartState('theme', 'blue') // ❌ compile error
+```
+
+- Built with the strictest TypeScript settings (`strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `verbatimModuleSyntax`) and shipped with type-level tests.
+
 ## Next.js / SSR
 
 Safe by design: the server renders the initial value; the client hydrates from storage right after mount — **no hydration mismatch warnings**, no `typeof window` guards in your code. Works in the App Router and Pages Router alike.
@@ -89,11 +139,14 @@ Handy in event handlers, analytics glue or non-React islands.
 | Shared across components, no provider | ✅ | ✅ | ❌ | ✅ |
 | Cross-tab sync | ✅ | ✅ | ✅ | via extra code |
 | TTL / expiry | ✅ | ❌ | ❌ | ❌ |
+| Versioned migrations | ✅ | ❌ | ❌ | ✅ |
+| Runtime validation (`parse`, schema-friendly) | ✅ | ❌ | ❌ | ❌ |
+| Selector subscriptions (slice re-renders) | ✅ | ❌ | ❌ | ✅ |
 | Debounced writes + flush on page hide | ✅ | ❌ | ❌ | ❌ |
-| Custom serializers | ✅ | ✅ | ✅ | ✅ |
+| Type-enforced options, typed key registry | ✅ | ❌ | ❌ | ❌ |
 | Imperative access outside React | ✅ | ❌ | ❌ | ✅ |
 | Cross-framework storage format (Vue sibling) | ✅ | ❌ | ❌ | ❌ |
-| Size (min+gzip, no deps) | **~1.1 kB** | ~1.9 kB | part of a suite | ~3+ kB |
+| Size (min+gzip, no deps) | **~1.4 kB** | ~1.9 kB | part of a suite | ~3+ kB |
 
 Built on `useSyncExternalStore`: concurrent-mode correct, tearing-safe, and re-renders only the components that use the key.
 
@@ -109,6 +162,9 @@ Built on `useSyncExternalStore`: concurrent-mode correct, tearing-safe, and re-r
 | `writeDebounce` | `number`                                 | —              | Debounce storage writes; flushed on `pagehide`.                    |
 | `serializer`    | `{ read(raw): T; write(value): string }` | JSON           | Custom (de)serialization.                                          |
 | `onError`       | `(error, context) => void`               | `console.warn` | Called on read/write/sync failures.                                |
+| `parse`         | `(value: unknown) => T`                  | —              | Validate untrusted data from storage/sync (throw to reject).       |
+| `version`       | `number`                                 | —              | Schema version of the persisted value.                             |
+| `migrate`       | `(value, fromVersion) => T | undefined` | —              | Upgrade older persisted values; undefined discards them.           |
 
 ## Development
 
