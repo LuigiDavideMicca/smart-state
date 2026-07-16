@@ -1,0 +1,26 @@
+# Node modules
+/node_modules/
+
+# Build output
+/dist/
+/build/
+/lib/
+/out/
+
+# IDE files
+/.idea/
+/.vscode/
+
+# Logs
+*.log
+
+# npm packages
+package-lock.json
+pnpm-lock.yaml
+
+# Typescript
+*.tsbuildinfo
+
+# OS specific files
+.DS_Store
+Thumbs.db

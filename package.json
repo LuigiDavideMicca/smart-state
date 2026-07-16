@@ -1,0 +1,73 @@
+{
+  "name": "smart-state",
+  "version": "0.1.0",
+  "description": "React's useState, grown up: persistent, shared across components and tabs, TTL expiry, debounced writes, SSR/Next.js-safe. No provider, zero dependencies, ~1 kB.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "size": "tsup && node -e \"const z=require('zlib');const s=require('fs').readFileSync('dist/index.js');console.log('esm min+gzip:',z.gzipSync(s).length,'bytes')\"",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+  },
+  "keywords": [
+    "react",
+    "nextjs",
+    "hooks",
+    "useState",
+    "use-local-storage",
+    "state",
+    "state-management",
+    "persistent",
+    "persisted-state",
+    "localStorage",
+    "sessionStorage",
+    "cross-tab",
+    "ttl",
+    "debounce",
+    "ssr",
+    "typescript"
+  ],
+  "author": "Luigi Davide Micca <luigimicca94@gmail.com> (https://luigimicca.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LuigiDavideMicca/smart-state.git"
+  },
+  "homepage": "https://github.com/LuigiDavideMicca/smart-state#readme",
+  "bugs": {
+    "url": "https://github.com/LuigiDavideMicca/smart-state/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.0",
+    "@types/react": "^19.0.0",
+    "happy-dom": "^20.0.11",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
