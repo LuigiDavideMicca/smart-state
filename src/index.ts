@@ -74,6 +74,12 @@ export interface PersistOptions<T> extends CommonOptions {
    * Sync schemas only: async validation is rejected at runtime.
    */
   schema?: StandardSchemaV1<unknown, T>
+  /**
+   * When both the stored and the initial value are plain objects, merge the
+   * stored one over the defaults: `true` = shallow `{ ...defaults, ...stored }`,
+   * or a custom merge function. Runs after `parse`/`schema`/`migrate`.
+   */
+  mergeDefaults?: boolean | ((stored: T, defaults: T) => T)
   /** Schema version of the persisted value. Bump it when the shape changes. */
   version?: number
   /** Upgrade values persisted with an older version; return undefined to discard them. */
@@ -134,6 +140,12 @@ const resolveNext = <T>(next: T | ((current: T) => T), current: T): T =>
 const resolveInitial = <T>(initial: T | (() => T)): T =>
   typeof initial === 'function' ? (initial as () => T)() : initial
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null) return false
+  const proto: unknown = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
 function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
   const persisted = options.persist === true ? options : undefined
   const key = persisted?.storageKey
@@ -181,9 +193,15 @@ function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
       if (result.issues) {
         throw new Error(`schema rejected stored value: ${result.issues.map((issue) => issue.message).join('; ')}`)
       }
-      return result.value
+      value = result.value
+    } else if (persisted?.parse) {
+      value = persisted.parse(value)
     }
-    return persisted?.parse ? persisted.parse(value) : (value as T)
+    const merge = persisted?.mergeDefaults
+    if (merge !== undefined && merge !== false && isPlainObject(value) && isPlainObject(initial)) {
+      return (merge === true ? { ...initial, ...value } : merge(value as T, initial)) as T
+    }
+    return value as T
   }
 
   const encode = (value: T): string => {

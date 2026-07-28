@@ -295,6 +295,50 @@ describe('standard schema validation', () => {
   })
 })
 
+describe('mergeDefaults', () => {
+  it('true shallow-merges the stored object over the defaults', () => {
+    localStorage.setItem(KEY, JSON.stringify({ a: 1 }))
+    const { result } = renderHook(() =>
+      useSmartState({ a: 0, b: 2 }, { persist: true, storageKey: KEY, mergeDefaults: true })
+    )
+    expect(result.current[0]).toEqual({ a: 1, b: 2 })
+  })
+
+  it('accepts a custom merge function', () => {
+    localStorage.setItem(KEY, JSON.stringify({ list: [1] }))
+    const { result } = renderHook(() =>
+      useSmartState({ list: [0] }, {
+        persist: true,
+        storageKey: KEY,
+        mergeDefaults: (stored, defaults) => ({ list: [...defaults.list, ...stored.list] })
+      })
+    )
+    expect(result.current[0]).toEqual({ list: [0, 1] })
+  })
+
+  it('is a no-op when either side is not a plain object', () => {
+    localStorage.setItem(KEY, '[1,2]')
+    const { result } = renderHook(() =>
+      useSmartState([0], { persist: true, storageKey: KEY, mergeDefaults: true })
+    )
+    expect(result.current[0]).toEqual([1, 2])
+  })
+
+  it('runs after migrate', () => {
+    localStorage.setItem(KEY, JSON.stringify({ __vss: 1, value: '{"a":1}', v: 1 }))
+    const { result } = renderHook(() =>
+      useSmartState({ a: 0, b: 2 }, {
+        persist: true,
+        storageKey: KEY,
+        version: 2,
+        migrate: (old) => old as { a: number; b: number },
+        mergeDefaults: true
+      })
+    )
+    expect(result.current[0]).toEqual({ a: 1, b: 2 })
+  })
+})
+
 describe('selector and external subscription', () => {
   it('useSmartSelector re-renders only when the slice changes', () => {
     const opts = { persist: true, storageKey: KEY } as const
