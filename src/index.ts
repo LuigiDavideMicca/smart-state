@@ -54,7 +54,7 @@ export interface PersistOptions<T> extends CommonOptions {
   persist: true
   /** Storage key — required with `persist`, enforced at the type level. */
   storageKey: string
-  /** `local` (default) or `session`. Cross-tab sync only works with `local`. */
+  /** `local` (default) or `session`. `storage`-event sync only works with `local`. */
   storageType?: StorageType
   /** Custom synchronous storage backend; takes precedence over `storageType`. */
   storage?: StorageLike
