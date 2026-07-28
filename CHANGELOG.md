@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/LuigiDavideMicca/smart-state/compare/v0.2.0...v0.2.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* **ci:** upgrade npm for the oidc token exchange ([6ce26dd](https://github.com/LuigiDavideMicca/smart-state/commit/6ce26dd2c385111784b032af81b7a21f5a64badc))
+
 ## [0.2.0](https://github.com/LuigiDavideMicca/smart-state/compare/smart-state-v0.1.0...smart-state-v0.2.0) (2026-07-28)
 
 

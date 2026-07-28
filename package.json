@@ -1,6 +1,6 @@
 {
   "name": "smart-state",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "React's useState, grown up: persistent, shared across components and tabs, TTL expiry, schema validation, cookie storage, debounced writes, SSR/Next.js-safe. No provider, zero dependencies, ~2 kB.",
   "type": "module",
   "main": "./dist/index.cjs",
