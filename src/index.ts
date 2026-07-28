@@ -7,6 +7,13 @@ export interface Serializer<T> {
   write: (value: T) => string
 }
 
+/** Minimal synchronous storage contract; `localStorage`-compatible. */
+export interface StorageLike {
+  getItem: (key: string) => string | null
+  setItem: (key: string, value: string) => void
+  removeItem: (key: string) => void
+}
+
 export type StandardSchemaResult<Output> =
   | { readonly value: Output; readonly issues?: undefined }
   | { readonly issues: ReadonlyArray<{ readonly message: string }> }
@@ -49,6 +56,8 @@ export interface PersistOptions<T> extends CommonOptions {
   storageKey: string
   /** `local` (default) or `session`. Cross-tab sync only works with `local`. */
   storageType?: StorageType
+  /** Custom synchronous storage backend; takes precedence over `storageType`. */
+  storage?: StorageLike
   /** Keep the value in sync across browser tabs via the `storage` event. */
   syncTabs?: boolean
   /** Milliseconds a persisted value stays fresh; expired values fall back to the initial value. */
@@ -138,11 +147,10 @@ function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
   const version = persisted?.version
   const writeDebounce = persisted?.writeDebounce
 
-  const storage =
+  const storage: StorageLike | undefined =
     persisted && key !== undefined && isClient
-      ? persisted.storageType === 'session'
-        ? window.sessionStorage
-        : window.localStorage
+      ? persisted.storage ??
+        (persisted.storageType === 'session' ? window.sessionStorage : window.localStorage)
       : undefined
 
   const decode = (raw: string): T | undefined => {
@@ -427,5 +435,44 @@ export function subscribeSmartState<T>(
   store.listeners.add(wrapped)
   return () => {
     store.listeners.delete(wrapped)
+  }
+}
+
+export interface CookieStorageOptions {
+  /** Days until the cookie expires. Default: 365. */
+  days?: number
+  /** Cookie path. Default: `/`. */
+  path?: string
+  /** SameSite attribute. Default: `lax`. */
+  sameSite?: 'lax' | 'strict' | 'none'
+  /** Secure attribute. Default: true when `sameSite` is `none`. */
+  secure?: boolean
+}
+
+/**
+ * A `StorageLike` over `document.cookie`, so the server can read the value too
+ * (e.g. render the persisted theme without a flash). SSR-safe: without a
+ * `document`, reads return null and writes no-op.
+ */
+export function cookieStorage(options: CookieStorageOptions = {}): StorageLike {
+  const { days = 365, path = '/', sameSite = 'lax', secure = sameSite === 'none' } = options
+  const write = (key: string, value: string, expires: Date): void => {
+    if (typeof document === 'undefined') return
+    document.cookie =
+      `${encodeURIComponent(key)}=${encodeURIComponent(value)}` +
+      `; expires=${expires.toUTCString()}; path=${path}; samesite=${sameSite}${secure ? '; secure' : ''}`
+  }
+  return {
+    getItem: (key) => {
+      if (typeof document === 'undefined') return null
+      const prefix = `${encodeURIComponent(key)}=`
+      for (const part of document.cookie.split(';')) {
+        const cookie = part.trim()
+        if (cookie.startsWith(prefix)) return decodeURIComponent(cookie.slice(prefix.length))
+      }
+      return null
+    },
+    setItem: (key, value) => write(key, value, new Date(Date.now() + days * 86_400_000)),
+    removeItem: (key) => write(key, '', new Date(0))
   }
 }

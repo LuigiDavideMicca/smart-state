@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getSmartState, setSmartState, subscribeSmartState, useSmartSelector, useSmartState, type SmartStateOptions, type StandardSchemaV1 } from '../src/index'
+import { cookieStorage, getSmartState, setSmartState, subscribeSmartState, useSmartSelector, useSmartState, type SmartStateOptions, type StandardSchemaV1, type StorageLike } from '../src/index'
 
 let seq = 0
 let KEY = ''
@@ -164,6 +164,48 @@ describe('validation and migrations', () => {
       useSmartState('init', { persist: true, storageKey: KEY, version: 2 })
     )
     expect(result.current[0]).toBe('init')
+  })
+})
+
+describe('custom storage', () => {
+  it('takes precedence over storageType for reads, writes and clear', () => {
+    const backing = new Map<string, string>()
+    const storage: StorageLike = {
+      getItem: (key) => backing.get(key) ?? null,
+      setItem: (key, value) => void backing.set(key, value),
+      removeItem: (key) => void backing.delete(key)
+    }
+    backing.set(KEY, '"stored"')
+    const { result } = renderHook(() =>
+      useSmartState('init', { persist: true, storageKey: KEY, storage, storageType: 'session' })
+    )
+    expect(result.current[0]).toBe('stored')
+    act(() => result.current[1]('next'))
+    expect(backing.get(KEY)).toBe('"next"')
+    expect(localStorage.getItem(KEY)).toBeNull()
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+    act(() => result.current[2].clear())
+    expect(backing.has(KEY)).toBe(false)
+  })
+})
+
+describe('cookieStorage', () => {
+  it('round-trips URI-encoded values through document.cookie', () => {
+    const cookies = cookieStorage()
+    cookies.setItem('theme', '"dark"')
+    expect(document.cookie).toContain('theme=%22dark%22')
+    expect(cookies.getItem('theme')).toBe('"dark"')
+    cookies.removeItem('theme')
+    expect(cookies.getItem('theme')).toBeNull()
+  })
+
+  it('persists smart state in a cookie', () => {
+    const { result } = renderHook(() =>
+      useSmartState('light', { persist: true, storageKey: KEY, storage: cookieStorage() })
+    )
+    act(() => result.current[1]('dark'))
+    expect(document.cookie).toContain(`${KEY}=%22dark%22`)
+    expect(cookieStorage().getItem(KEY)).toBe('"dark"')
   })
 })
 
