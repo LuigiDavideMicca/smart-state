@@ -7,6 +7,21 @@ export interface Serializer<T> {
   write: (value: T) => string
 }
 
+export type StandardSchemaResult<Output> =
+  | { readonly value: Output; readonly issues?: undefined }
+  | { readonly issues: ReadonlyArray<{ readonly message: string }> }
+
+/** Minimal Standard Schema v1 interface (standardschema.dev), vendored to stay dependency-free. */
+export interface StandardSchemaV1<Input = unknown, Output = Input> {
+  readonly '~standard': {
+    readonly version: 1
+    readonly vendor: string
+    readonly validate: (
+      value: unknown
+    ) => StandardSchemaResult<Output> | Promise<StandardSchemaResult<Output>>
+  }
+}
+
 /**
  * Augment this interface to get fully typed keys in `getSmartState`,
  * `setSmartState`, `subscribeSmartState` and `useSmartSelector`:
@@ -44,6 +59,12 @@ export interface PersistOptions<T> extends CommonOptions {
   serializer?: Serializer<T>
   /** Validate untrusted data from storage or other tabs: return the value or throw. */
   parse?: (value: unknown) => T
+  /**
+   * Standard Schema (zod 4, valibot, arktype…) run on hydration and cross-tab
+   * data; invalid values fall back to the initial value. Wins over `parse`.
+   * Sync schemas only: async validation is rejected at runtime.
+   */
+  schema?: StandardSchemaV1<unknown, T>
   /** Schema version of the persisted value. Bump it when the shape changes. */
   version?: number
   /** Upgrade values persisted with an older version; return undefined to discard them. */
@@ -112,6 +133,7 @@ function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
       console.warn(`[smart-state] ${context} failed${key ? ` for key "${key}"` : ''}`, error)
   } = options
   const serializer = persisted?.serializer ?? defaultSerializer<T>()
+  const schema = persisted?.schema
   const ttl = persisted?.ttl
   const version = persisted?.version
   const writeDebounce = persisted?.writeDebounce
@@ -141,6 +163,17 @@ function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
       if (!persisted?.migrate) return undefined
       value = persisted.migrate(value, fromVersion)
       if (value === undefined) return undefined
+    }
+    if (schema) {
+      const result = schema['~standard'].validate(value)
+      if (result instanceof Promise) {
+        console.error('[smart-state] async schema validation is not supported; using the initial value')
+        return undefined
+      }
+      if (result.issues) {
+        throw new Error(`schema rejected stored value: ${result.issues.map((issue) => issue.message).join('; ')}`)
+      }
+      return result.value
     }
     return persisted?.parse ? persisted.parse(value) : (value as T)
   }

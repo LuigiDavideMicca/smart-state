@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getSmartState, setSmartState, subscribeSmartState, useSmartSelector, useSmartState, type SmartStateOptions } from '../src/index'
+import { getSmartState, setSmartState, subscribeSmartState, useSmartSelector, useSmartState, type SmartStateOptions, type StandardSchemaV1 } from '../src/index'
 
 let seq = 0
 let KEY = ''
@@ -164,6 +164,92 @@ describe('validation and migrations', () => {
       useSmartState('init', { persist: true, storageKey: KEY, version: 2 })
     )
     expect(result.current[0]).toBe('init')
+  })
+})
+
+describe('standard schema validation', () => {
+  const numberSchema: StandardSchemaV1<unknown, number> = {
+    '~standard': {
+      version: 1,
+      vendor: 'test',
+      validate: (value) =>
+        typeof value === 'number' ? { value } : { issues: [{ message: 'expected number' }] }
+    }
+  }
+
+  it('accepts stored values that pass the schema', () => {
+    localStorage.setItem(KEY, '5')
+    const { result } = renderHook(() =>
+      useSmartState(0, { persist: true, storageKey: KEY, schema: numberSchema })
+    )
+    expect(result.current[0]).toBe(5)
+  })
+
+  it('rejects invalid stored values and falls back to the initial value', () => {
+    localStorage.setItem(KEY, '"not-a-number"')
+    const onError = vi.fn()
+    const { result } = renderHook(() =>
+      useSmartState(7, { persist: true, storageKey: KEY, schema: numberSchema, onError })
+    )
+    expect(result.current[0]).toBe(7)
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), 'read')
+  })
+
+  it('wins over parse when both are provided', () => {
+    localStorage.setItem(KEY, '5')
+    const parse = vi.fn()
+    const { result } = renderHook(() =>
+      useSmartState(0, { persist: true, storageKey: KEY, schema: numberSchema, parse })
+    )
+    expect(result.current[0]).toBe(5)
+    expect(parse).not.toHaveBeenCalled()
+  })
+
+  it('rejects async schemas at runtime with a console.error', () => {
+    localStorage.setItem(KEY, '5')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const asyncSchema: StandardSchemaV1<unknown, number> = {
+      '~standard': {
+        version: 1,
+        vendor: 'test',
+        validate: (value) => Promise.resolve({ value: value as number })
+      }
+    }
+    const { result } = renderHook(() =>
+      useSmartState(0, { persist: true, storageKey: KEY, schema: asyncSchema })
+    )
+    expect(result.current[0]).toBe(0)
+    expect(error).toHaveBeenCalledOnce()
+  })
+
+  it('validates cross-tab messages', () => {
+    const onError = vi.fn()
+    const { result } = renderHook(() =>
+      useSmartState(0, { persist: true, storageKey: KEY, schema: numberSchema, syncTabs: true, onError })
+    )
+    fire(KEY, '7')
+    expect(result.current[0]).toBe(7)
+    fire(KEY, '"bad"')
+    expect(result.current[0]).toBe(7)
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), 'sync')
+  })
+
+  it('infers the value type from the schema output', () => {
+    const themeSchema: StandardSchemaV1<unknown, 'light' | 'dark'> = {
+      '~standard': {
+        version: 1,
+        vendor: 'test',
+        validate: (value) =>
+          value === 'light' || value === 'dark'
+            ? { value }
+            : { issues: [{ message: 'expected a theme' }] }
+      }
+    }
+    const { result } = renderHook(() =>
+      useSmartState('light', { persist: true, storageKey: KEY, schema: themeSchema })
+    )
+    act(() => result.current[1]('dark')) // compiles because T is 'light' | 'dark'
+    expect(result.current[0]).toBe('dark')
   })
 })
 
