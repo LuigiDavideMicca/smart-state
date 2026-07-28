@@ -13,6 +13,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   vi.useRealTimers()
 })
 
@@ -366,6 +367,73 @@ describe('selector and external subscription', () => {
     off()
     act(() => result.current[1](3))
     expect(seen).toEqual([1, 2])
+  })
+})
+
+describe('broadcast sync', () => {
+  class MockBroadcastChannel {
+    static instances = new Set<MockBroadcastChannel>()
+    onmessage: ((event: { data: unknown }) => void) | null = null
+    constructor(readonly name: string) {
+      MockBroadcastChannel.instances.add(this)
+    }
+    postMessage(data: unknown) {
+      for (const other of MockBroadcastChannel.instances) {
+        if (other !== this && other.name === this.name) other.onmessage?.({ data })
+      }
+    }
+    close() {
+      MockBroadcastChannel.instances.delete(this)
+    }
+  }
+
+  beforeEach(() => {
+    MockBroadcastChannel.instances.clear()
+    vi.stubGlobal('BroadcastChannel', MockBroadcastChannel)
+  })
+
+  it('exchanges envelopes over a vss:<key> channel, sessionStorage included', () => {
+    const { result } = renderHook(() =>
+      useSmartState('a', { persist: true, storageKey: KEY, storageType: 'session', syncTabs: 'broadcast' })
+    )
+    const peer = new MockBroadcastChannel(`vss:${KEY}`)
+    const received: unknown[] = []
+    peer.onmessage = (event) => received.push(event.data)
+
+    act(() => result.current[1]('mine'))
+    expect(received).toEqual(['"mine"'])
+
+    act(() => peer.postMessage('"theirs"'))
+    expect(result.current[0]).toBe('theirs')
+
+    act(() => peer.postMessage(null))
+    expect(result.current[0]).toBe('a')
+  })
+
+  it('broadcasts null on clear and closes the channel on unmount', () => {
+    const hook = renderHook(() =>
+      useSmartState('a', { persist: true, storageKey: KEY, syncTabs: 'broadcast' })
+    )
+    const peer = new MockBroadcastChannel(`vss:${KEY}`)
+    const received: unknown[] = []
+    peer.onmessage = (event) => received.push(event.data)
+
+    act(() => hook.result.current[1]('b'))
+    act(() => hook.result.current[2].clear())
+    expect(received).toEqual(['"b"', null])
+
+    expect(MockBroadcastChannel.instances.size).toBe(2)
+    hook.unmount()
+    expect(MockBroadcastChannel.instances.size).toBe(1) // only the peer remains
+  })
+
+  it('falls back to storage events when BroadcastChannel is unavailable', () => {
+    vi.stubGlobal('BroadcastChannel', undefined)
+    const { result } = renderHook(() =>
+      useSmartState('a', { persist: true, storageKey: KEY, syncTabs: 'broadcast' })
+    )
+    fire(KEY, '"other"')
+    expect(result.current[0]).toBe('other')
   })
 })
 

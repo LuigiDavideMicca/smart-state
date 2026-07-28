@@ -58,8 +58,13 @@ export interface PersistOptions<T> extends CommonOptions {
   storageType?: StorageType
   /** Custom synchronous storage backend; takes precedence over `storageType`. */
   storage?: StorageLike
-  /** Keep the value in sync across browser tabs via the `storage` event. */
-  syncTabs?: boolean
+  /**
+   * Keep the value in sync across browser tabs. `true`/`'storage'` use the
+   * `storage` event (localStorage only); `'broadcast'` uses a BroadcastChannel,
+   * which also covers sessionStorage and custom storage, and falls back to the
+   * `storage` event where BroadcastChannel is unavailable.
+   */
+  syncTabs?: boolean | 'storage' | 'broadcast'
   /** Milliseconds a persisted value stays fresh; expired values fall back to the initial value. */
   ttl?: number
   /** Debounce storage writes by this many ms; pending writes flush on page hide. */
@@ -124,6 +129,8 @@ interface Store<T> {
   readonly set: SetSmartState<T>
   readonly controls: SmartStateControls
   readonly hydrate: () => void
+  readonly connect?: () => void
+  readonly disconnect?: () => void
 }
 
 const isClient = typeof window !== 'undefined'
@@ -215,6 +222,8 @@ function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
 
   let lastWritten: string | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
+  let channel: BroadcastChannel | undefined
+  let connections = 0
 
   const writeNow = (value: T): void => {
     if (!storage || key === undefined) return
@@ -223,6 +232,7 @@ function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
       if (raw === lastWritten) return
       lastWritten = raw
       storage.setItem(key, raw)
+      channel?.postMessage(raw)
     } catch (error) {
       onError(error, 'write')
     }
@@ -241,6 +251,29 @@ function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
   }
 
   const notify = (): void => store.listeners.forEach((listener) => listener())
+
+  const broadcast =
+    storage !== undefined &&
+    key !== undefined &&
+    persisted?.syncTabs === 'broadcast' &&
+    typeof BroadcastChannel !== 'undefined'
+
+  const applyExternal = (raw: string | null): void => {
+    if (raw === null) {
+      store.value = store.initial
+      notify()
+      return
+    }
+    if (raw === lastWritten) return
+    try {
+      const decoded = decode(raw)
+      lastWritten = raw
+      store.value = decoded === undefined ? store.initial : decoded
+      notify()
+    } catch (error) {
+      onError(error, 'sync')
+    }
+  }
 
   let hydrated = !storage
 
@@ -282,6 +315,7 @@ function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
         if (timer !== undefined) clearTimeout(timer)
         try {
           if (key !== undefined) storage?.removeItem(key)
+          channel?.postMessage(null)
         } catch (error) {
           onError(error, 'write')
         }
@@ -289,26 +323,30 @@ function createStore<T>(initial: T, options: SmartStateOptions<T>): Store<T> {
         store.value = store.initial
         notify()
       }
-    }
+    },
+    ...(broadcast
+      ? {
+          connect: (): void => {
+            connections += 1
+            if (channel) return
+            channel = new BroadcastChannel(`vss:${key as string}`)
+            channel.onmessage = (event: MessageEvent) =>
+              applyExternal(event.data as string | null)
+          },
+          disconnect: (): void => {
+            connections -= 1
+            if (connections > 0 || !channel) return
+            channel.close()
+            channel = undefined
+          }
+        }
+      : {})
   }
 
-  if (storage && key !== undefined && persisted?.syncTabs) {
+  if (storage && key !== undefined && persisted?.syncTabs && !broadcast) {
     window.addEventListener('storage', (event) => {
       if (event.key !== key || event.storageArea !== storage) return
-      if (event.newValue === null) {
-        store.value = store.initial
-        notify()
-        return
-      }
-      if (event.newValue === lastWritten) return
-      try {
-        const decoded = decode(event.newValue)
-        lastWritten = event.newValue
-        store.value = decoded === undefined ? store.initial : decoded
-        notify()
-      } catch (error) {
-        onError(error, 'sync')
-      }
+      applyExternal(event.newValue)
     })
   }
 
@@ -356,9 +394,11 @@ export function useSmartState<T>(
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       store.listeners.add(onStoreChange)
+      store.connect?.()
       store.hydrate()
       return () => {
         store.listeners.delete(onStoreChange)
+        store.disconnect?.()
       }
     },
     [store]
@@ -399,9 +439,11 @@ export function useSmartSelector<T, S>(
       const store = getKeyedStore<T>(storageKey)
       if (!store) return () => {}
       store.listeners.add(onStoreChange)
+      store.connect?.()
       store.hydrate()
       return () => {
         store.listeners.delete(onStoreChange)
+        store.disconnect?.()
       }
     },
     [storageKey]
@@ -451,8 +493,10 @@ export function subscribeSmartState<T>(
   if (!store) return () => {}
   const wrapped = () => listener(store.value)
   store.listeners.add(wrapped)
+  store.connect?.()
   return () => {
     store.listeners.delete(wrapped)
+    store.disconnect?.()
   }
 }
 
