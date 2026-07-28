@@ -1,0 +1,34 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Auto-merge release PR
+        if: ${{ steps.release.outputs.pr }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr merge --squash "${{ fromJson(steps.release.outputs.pr).number }}" --repo "${{ github.repository }}"
+
+      # Merges by the Actions token do not re-trigger this workflow: a second
+      # pass in the same run creates the tag and the GitHub Release.
+      - name: Tag and publish release
+        if: ${{ steps.release.outputs.pr }}
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
