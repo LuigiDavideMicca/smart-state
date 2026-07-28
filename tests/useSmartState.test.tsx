@@ -437,6 +437,48 @@ describe('broadcast sync', () => {
   })
 })
 
+describe('cross-framework envelope interop', () => {
+  const NOW = 1_700_000_000_000
+
+  it('reads plain values written without ttl or version', () => {
+    localStorage.setItem(KEY, '"dark"')
+    const { result } = renderHook(() => useSmartState('light', { persist: true, storageKey: KEY }))
+    expect(result.current[0]).toBe('dark')
+  })
+
+  it('reads a fresh envelope written by vue-smart-state', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    localStorage.setItem(KEY, '{"__vss":1,"value":"{\\"count\\":3}","expires":1700000060000,"v":2}')
+    const { result } = renderHook(() =>
+      useSmartState({ count: 0 }, { persist: true, storageKey: KEY, ttl: 60_000, version: 2 })
+    )
+    expect(result.current[0]).toEqual({ count: 3 })
+  })
+
+  it('discards an expired envelope', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    localStorage.setItem(KEY, '{"__vss":1,"value":"{\\"count\\":3}","expires":1699999999999,"v":2}')
+    const { result } = renderHook(() =>
+      useSmartState({ count: 0 }, { persist: true, storageKey: KEY, ttl: 60_000, version: 2 })
+    )
+    expect(result.current[0]).toEqual({ count: 0 })
+  })
+
+  it('writes byte-compatible envelopes', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    const { result } = renderHook(() =>
+      useSmartState({ count: 0 }, { persist: true, storageKey: KEY, ttl: 60_000, version: 2 })
+    )
+    act(() => result.current[1]({ count: 3 }))
+    expect(localStorage.getItem(KEY)).toBe(
+      '{"__vss":1,"value":"{\\"count\\":3}","expires":1700000060000,"v":2}'
+    )
+  })
+})
+
 describe('type safety', () => {
   it('rejects persist without storageKey at compile time', () => {
     // @ts-expect-error — storageKey is mandatory with persist: true
