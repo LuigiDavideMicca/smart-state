@@ -159,7 +159,6 @@ try {
 const stores = new Map<string, Store<unknown>>()
 const primary = new Map<string, Store<unknown>>()
 const watchers = new Map<string, Set<() => void>>()
-const serverInitials = new Map<string, unknown>()
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const json: Serializer<any> = { read: (raw) => JSON.parse(raw) as unknown, write: (value) => JSON.stringify(value) }
@@ -528,10 +527,6 @@ export function useSmartState<T>(
     attached.current = store
   } else {
     store = local.current ??= createStore(resolveInitial(initialValue), {})
-    if (key !== undefined && !serverInitials.has(key)) {
-      if (serverInitials.size === 0) queueMicrotask(() => serverInitials.clear())
-      serverInitials.set(key, store.initial)
-    }
   }
 
   const subscribe = useCallback(
@@ -596,7 +591,12 @@ export function useSmartSelector<T, S>(
   return useSyncExternalStore(
     subscribe,
     () => select(primary.get(storageKey)?.get()),
-    () => select(isClient ? primary.get(storageKey)?.initial : serverInitials.get(storageKey))
+    // On the server and while hydrating a selector sees undefined: a
+    // module-level registry of initial values, cleared in a microtask, leaked
+    // one request's value into the next render of the same tick and diverged
+    // from the client inside a Suspense boundary that resumed later (found by
+    // the verifier of the previous fix). It updates right after hydration.
+    () => select(undefined)
   )
 }
 

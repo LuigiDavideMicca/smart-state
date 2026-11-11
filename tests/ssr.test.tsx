@@ -40,7 +40,7 @@ describe('SSR (no window)', () => {
       return createElement('b', null, useSmartSelector<string, string>('ssr-user', (v) => v ?? 'none'))
     }
     expect(renderToString(createElement('div', null, createElement(Anonymous), createElement(Selector)))).toBe(
-      '<div><span>guest</span><b>guest</b></div>'
+      '<div><span>guest</span><b>none</b></div>'
     ) // observed: <b>alice</b> — another user's data in an anonymous request
   })
 })
@@ -50,16 +50,19 @@ describe('SSR isolation', () => {
     return createElement('b', null, useSmartSelector<string, string>('ssr-iso', (v) => v ?? 'none'))
   }
 
-  it('a selector sees the initial value of an owner rendered earlier in the same pass only', async () => {
+  it('a selector never sees server state, not even an owner rendered in the same tick', async () => {
     function Owner({ initial }: { initial: string }) {
       const [v] = useSmartState(initial, { persist: true, storageKey: 'ssr-iso' })
       return createElement('span', null, v)
     }
     expect(renderToString(createElement('div', null, createElement(Owner, { initial: 'alice' }), createElement(Selector)))).toBe(
-      '<div><span>alice</span><b>alice</b></div>'
+      '<div><span>alice</span><b>none</b></div>'
     )
-    await Promise.resolve()
     expect(renderToString(createElement(Selector))).toBe('<b>none</b>')
+    // two renders in one synchronous segment, as a prerender loop does
+    expect(renderToString(createElement('div', null, createElement(Owner, { initial: 'bob' }), createElement(Selector)))).toBe(
+      '<div><span>bob</span><b>none</b></div>'
+    )
   })
 
   it('imperative APIs never expose server state', async () => {

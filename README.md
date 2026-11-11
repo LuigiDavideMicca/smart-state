@@ -43,7 +43,7 @@ const [theme, setTheme] = useSmartState<'light' | 'dark'>('light', {
 
 One call gives you: restore on load, write on change, cross-tab sync, and — because keyed state lives in a shared store — **every component using `storageKey: 'theme'` sees the same value instantly, with no Context provider**.
 
-Stores are shared per key *and* backend: `storageKey: 'theme'` in `localStorage`, in `sessionStorage` and in a custom `storage` are three separate stores (`getSmartState`, `useSmartSelector` & co. address the first one created for that key). Components sharing a store should pass the same options and initial value: the first initial value wins (it is what `reset()`/`clear()` go back to), options from later components are merged in, and in development a `console.warn` flags the mismatch.
+Stores are shared per key *and* backend: `storageKey: 'theme'` in `localStorage`, in `sessionStorage` and in a custom `storage` are three separate stores (all custom backends share one store per key: an inline `cookieStorage()` is a new object on every render, so the store cannot key on the instance) (`getSmartState`, `useSmartSelector` & co. address the first one created for that key). Components sharing a store should pass the same options and initial value: the first initial value wins (it is what `reset()`/`clear()` go back to), options from later components are merged in, and in development a `console.warn` flags the mismatch.
 
 ```tsx
 // A session that expires on its own
@@ -169,7 +169,7 @@ Re-render only on the slice you care about:
 const itemCount = useSmartSelector<Cart, number>('cart', (cart) => cart?.items.length ?? 0)
 ```
 
-Inline selectors and `isEqual` functions are fine: the latest ones are used on every render, so selectors that close over props stay correct. A selector may mount before the component owning the key: it sees `undefined` until the owning `useSmartState` mounts, then updates. During hydration it renders `selector(initialValue)`, matching the server.
+Inline selectors and `isEqual` functions are fine: the latest ones are used on every render, so selectors that close over props stay correct. A selector may mount before the component owning the key: it sees `undefined` until the owning `useSmartState` mounts, then updates. On the server and while hydrating it renders `selector(undefined)` — the same on both sides, so there is no mismatch — and switches to the stored value right after hydration. Where a value must render on the server, read it with `useSmartState`.
 
 And listen from anywhere, React or not (also before any component uses the key):
 
@@ -200,7 +200,7 @@ setSmartState('theme', 'blue') // ❌ compile error
 
 Safe by design, App Router and Pages Router alike, with no `typeof window` guards in your code:
 
-- **The server never shares state between requests.** On the server each component renders the initial value it was given in that render; `setState` during a server render only affects that render, and nothing is kept in module-level memory. `getSmartState` returns `undefined` and `setSmartState` is a no-op on the server; `useSmartSelector` sees the initial value of a `useSmartState` with the same key rendered earlier in the same render pass, otherwise `undefined`.
+- **The server never shares state between requests.** On the server each component renders the initial value it was given in that render; `setState` during a server render only affects that render, and nothing is kept in module-level memory. `getSmartState` returns `undefined` and `setSmartState` is a no-op on the server; `useSmartSelector` renders `selector(undefined)`.
 - **Hydration renders the initial value**, exactly like the server, and switches to the stored value right after: no hydration mismatch. Pass a server-provided initial value (see the [cookie recipe](#custom-storage-and-the-no-flash-cookie-recipe)) to start from the right value.
 - **Client-only renders read storage synchronously**: a Vite SPA, a client-side navigation or anything mounted after hydration shows the stored value in its first frame, with no flash.
 - The build ships with a `'use client'` directive, so Server Components can import it as a client boundary (`readSmartCookie` is a plain function and works there too).
