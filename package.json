@@ -1,16 +1,21 @@
 {
   "name": "smart-state",
   "version": "0.2.1",
-  "description": "React's useState, grown up: persistent, shared across components and tabs, TTL expiry, schema validation, cookie storage, debounced writes, SSR/Next.js-safe. No provider, zero dependencies, ~2 kB.",
+  "description": "React's useState, grown up: persistent, shared across components and tabs, TTL expiry, schema validation, cookie storage, debounced writes, SSR/Next.js-safe. No provider, zero dependencies, ~3 kB.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "files": [
@@ -68,6 +73,7 @@
   "devDependencies": {
     "@testing-library/react": "^16.3.0",
     "@types/react": "^19.0.0",
+    "@types/react-dom": "~19.2.0",
     "happy-dom": "^20.0.11",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
