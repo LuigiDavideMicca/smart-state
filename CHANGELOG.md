@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/LuigiDavideMicca/smart-state/compare/v0.2.1...v0.3.0) (2026-11-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* on the server, keyed state is per component and getSmartState/setSmartState do nothing; an expired ttl resets the state while the tab is open; setState(undefined) removes the entry; the same key on a different storage is a separate store; subscribeSmartState listeners only run when the value changes; useSmartSelector uses the latest selector.
+
+### Features
+
+* per-request state on the server, the stored value on the first render, and the sync bugs fixed ([f7c9900](https://github.com/LuigiDavideMicca/smart-state/commit/f7c9900429bfdecb4ffab73242ea4d5686d3801b))
+
+
+### Bug Fixes
+
+* a selector never sees server state, not even in the same tick ([fa0ef8e](https://github.com/LuigiDavideMicca/smart-state/commit/fa0ef8e805c084bcc2ec36d637cb09fadcaa7cc4))
+
 ## [0.2.1](https://github.com/LuigiDavideMicca/smart-state/compare/v0.2.0...v0.2.1) (2026-07-28)
 
 
